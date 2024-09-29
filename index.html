@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Random Video Chat</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        /* Add your styles here */
+        #chatBox {
+            margin-top: 20px;
+            border: 1px solid #ccc;
+            padding: 10px;
+            height: 300px;
+            overflow-y: scroll;
+        }
+        #messageInput {
+            width: 80%;
+        }
+    </style>
+</head>
+<body>
+    <h1>Random Video Chat</h1>
+    <div id="videos">
+        <video id="localVideo" autoplay muted></video>
+        <video id="remoteVideo" autoplay></video>
+    </div>
+    <button id="startButton">Start Chat</button>
+    <button id="skipButton">Skip</button>
+    <button id="hangupButton">Stop Chat</button>
+    
+    <div id="chatBox"></div>
+    <input type="text" id="messageInput" placeholder="Type your message...">
+    <button id="sendMessageButton">Send</button>
+    
+    <div id="messages"></div>
+    <p id="userCount"></p>
+
+    <script>
+        const socket = io();
+        let peerConnection;
+        let localStream;
+        let remoteStream;
+        const configuration = {
+            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+        };
+
+        const startButton = document.getElementById('startButton');
+        const skipButton = document.getElementById('skipButton');
+        const hangupButton = document.getElementById('hangupButton');
+        const localVideo = document.getElementById('localVideo');
+        const remoteVideo = document.getElementById('remoteVideo');
+        const userCount = document.getElementById('userCount');
+        const chatBox = document.getElementById('chatBox');
+        const messageInput = document.getElementById('messageInput');
+        const sendMessageButton = document.getElementById('sendMessageButton');
+
+        // Chat functionality
+        sendMessageButton.onclick = () => {
+            const message = messageInput.value;
+            if (message.trim()) {
+                socket.emit('chat-message', message);
+                addMessageToChatBox('You', message);
+                messageInput.value = ''; // Clear input after sending
+            }
+        };
+
+        function addMessageToChatBox(sender, message) {
+            const messageElement = document.createElement('div');
+            messageElement.innerHTML = `<strong>${sender}:</strong> ${message}`;
+            chatBox.appendChild(messageElement);
+            chatBox.scrollTop = chatBox.scrollHeight; // Scroll to the bottom of the chat
+        }
+
+        socket.on('chat-message', ({ sender, message }) => {
+            addMessageToChatBox(sender, message);
+        });
+
+        startButton.onclick = () => {
+            socket.emit('start-chat');
+        };
+
+        skipButton.onclick = () => {
+            socket.emit('skip');
+        };
+
+        hangupButton.onclick = () => {
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+                localStream.getTracks().forEach(track => track.stop());
+                localVideo.srcObject = null;
+                remoteVideo.srcObject = null;
+            }
+        };
+
+        socket.on('connected', ({ peerId }) => {
+            navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
+                localStream = stream;
+                localVideo.srcObject = localStream;
+
+                peerConnection = new RTCPeerConnection(configuration);
+                localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+                peerConnection.onicecandidate = event => {
+                    if (event.candidate) {
+                        socket.emit('candidate', event.candidate);
+                    }
+                };
+
+                peerConnection.ontrack = event => {
+                    remoteVideo.srcObject = event.streams[0];
+                };
+
+                peerConnection.createOffer().then(offer => {
+                    return peerConnection.setLocalDescription(offer);
+                }).then(() => {
+                    socket.emit('offer', peerConnection.localDescription);
+                });
+            });
+        });
+
+        socket.on('offer', offer => {
+            peerConnection.setRemoteDescription(new RTCSessionDescription(offer)).then(() => {
+                return peerConnection.createAnswer();
+            }).then(answer => {
+                return peerConnection.setLocalDescription(answer);
+            }).then(() => {
+                socket.emit('answer', peerConnection.localDescription);
+            });
+        });
+
+        socket.on('answer', answer => {
+            peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        });
+
+        socket.on('candidate', candidate => {
+            peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        });
+
+        socket.on('chat-ended', () => {
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+                localStream.getTracks().forEach(track => track.stop());
+                localVideo.srcObject = null;
+                remoteVideo.srcObject = null;
+            }
+        });
+
+        socket.on('no-users', message => {
+            alert(message);
+        });
+
+        socket.on('user-count', count => {
+            userCount.innerText = `Users online: ${count}`;
+        });
+    </script>
+</body>
+</html>
