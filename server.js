@@ -7,6 +7,8 @@ const server = http.createServer(app);
 const io = socketIo(server);
 
 const PORT = 8080;
+let availableUsers = [];
+let rooms = {};
 
 app.use(express.static(__dirname));
 
@@ -14,104 +16,126 @@ app.get("/", (req, res) => {
     res.sendFile(__dirname + "/index.html");
 });
 
-let availableUsers = [];
-let rooms = {};
-
 io.on("connection", (socket) => {
-    console.log("A user connected");
-
+    console.log("A user connected:", socket.id);
     availableUsers.push(socket.id);
-    io.emit('user-count', availableUsers.length);
+    io.emit("user-count", availableUsers.length);
 
-    socket.on("offer", (offer) => {
-        const roomId = rooms[socket.id];
-        if (roomId) {
-            const otherUser = roomId.participantA === socket.id ? roomId.participantB : roomId.participantA;
-            io.to(otherUser).emit("offer", offer);
-        }
-    });
-
-    socket.on("answer", (answer) => {
-        const roomId = rooms[socket.id];
-        if (roomId) {
-            const otherUser = roomId.participantA === socket.id ? roomId.participantB : roomId.participantA;
-            io.to(otherUser).emit("answer", answer);
-        }
-    });
-
-    socket.on("candidate", (candidate) => {
-        const roomId = rooms[socket.id];
-        if (roomId) {
-            const otherUser = roomId.participantA === socket.id ? roomId.participantB : roomId.participantA;
-            io.to(otherUser).emit("candidate", candidate);
-        }
-    });
-
-    socket.on('start-chat', () => {
+    // Start chat event
+    socket.on("start-chat", () => {
         if (availableUsers.length >= 2) {
             const participantA = socket.id;
-            const participantB = availableUsers.find(id => id !== participantA);
+            const participantB = availableUsers.find(
+                (id) => id !== participantA,
+            );
 
-            const roomId = `${participantA}-${participantB}`;
-            rooms[participantA] = { participantA, participantB, roomId };
-            rooms[participantB] = { participantA, participantB, roomId };
+            if (!participantB) {
+                socket.emit("no-users", "No users available at the moment");
+                return;
+            }
 
-            availableUsers = availableUsers.filter(id => id !== participantA && id !== participantB);
+            rooms[participantA] = { participantA, participantB };
+            rooms[participantB] = { participantA, participantB };
 
-            io.to(participantA).emit('connected', { peerId: participantB });
-            io.to(participantB).emit('connected', { peerId: participantA });
+            // Notify both participants that they are connected
+            io.to(participantA).emit("connected", { peerId: participantB });
+            io.to(participantB).emit("connected", { peerId: participantA });
+
+            availableUsers = availableUsers.filter(
+                (id) => id !== participantA && id !== participantB,
+            );
         } else {
-            socket.emit('no-users', 'No users available at the moment');
+            socket.emit("no-users", "Waiting for another user...");
         }
-
-        io.emit('user-count', availableUsers.length);
     });
 
     // Handle chat messages
-    socket.on('chat-message', (message) => {
-        const roomId = rooms[socket.id];
-        if (roomId) {
-            const otherUser = roomId.participantA === socket.id ? roomId.participantB : roomId.participantA;
-            io.to(otherUser).emit('chat-message', { sender: 'Stranger', message });
+    socket.on("chat-message", (message) => {
+        const room = rooms[socket.id];
+        if (room) {
+            const recipient =
+                room.participantA === socket.id
+                    ? room.participantB
+                    : room.participantA;
+            io.to(recipient).emit("chat-message", {
+                sender: socket.id,
+                message,
+            });
         }
     });
 
-    socket.on('skip', () => {
-        const roomId = rooms[socket.id];
-        if (roomId) {
-            const otherUser = roomId.participantA === socket.id ? roomId.participantB : roomId.participantA;
+    // Handle ICE candidate exchange
+    socket.on("candidate", (candidate) => {
+        const room = rooms[socket.id];
+        if (room) {
+            const recipient =
+                room.participantA === socket.id
+                    ? room.participantB
+                    : room.participantA;
+            io.to(recipient).emit("candidate", candidate);
+        }
+    });
 
-            io.to(otherUser).emit('chat-ended');
-            io.to(socket.id).emit('chat-ended');
+    // Handle offer exchange
+    socket.on("offer", (offer) => {
+        const room = rooms[socket.id];
+        if (room) {
+            const recipient =
+                room.participantA === socket.id
+                    ? room.participantB
+                    : room.participantA;
+            io.to(recipient).emit("offer", offer);
+        }
+    });
 
-            availableUsers.push(socket.id);
-            availableUsers.push(otherUser);
+    // Handle answer exchange
+    socket.on("answer", (answer) => {
+        const room = rooms[socket.id];
+        if (room) {
+            const recipient =
+                room.participantA === socket.id
+                    ? room.participantB
+                    : room.participantA;
+            io.to(recipient).emit("answer", answer);
+        }
+    });
 
+    // Handle skipping the chat
+    socket.on("skip", () => {
+        const room = rooms[socket.id];
+        if (room) {
+            const otherParticipant =
+                room.participantA === socket.id
+                    ? room.participantB
+                    : room.participantA;
+            io.to(otherParticipant).emit("disconnected");
             delete rooms[socket.id];
-            delete rooms[otherUser];
+            delete rooms[otherParticipant];
+            availableUsers.push(socket.id);
+            availableUsers.push(otherParticipant);
+            io.emit("user-count", availableUsers.length);
         }
-
-        io.emit('user-count', availableUsers.length);
     });
 
+    // Handle disconnection
     socket.on("disconnect", () => {
-        console.log("User disconnected");
-
-        availableUsers = availableUsers.filter(id => id !== socket.id);
-
-        const roomId = rooms[socket.id];
-        if (roomId) {
-            const otherUser = roomId.participantA === socket.id ? roomId.participantB : roomId.participantA;
-            io.to(otherUser).emit('chat-ended');
-            availableUsers.push(otherUser);
-            delete rooms[otherUser];
+        console.log("User disconnected:", socket.id);
+        availableUsers = availableUsers.filter((id) => id !== socket.id);
+        io.emit("user-count", availableUsers.length);
+        const room = rooms[socket.id];
+        if (room) {
+            const otherParticipant =
+                room.participantA === socket.id
+                    ? room.participantB
+                    : room.participantA;
+            io.to(otherParticipant).emit("disconnected");
+            delete rooms[socket.id];
+            delete rooms[otherParticipant];
+            availableUsers.push(otherParticipant);
         }
-
-        delete rooms[socket.id];
-        io.emit('user-count', availableUsers.length);
-    });   
+    });
 });
 
 server.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
+    console.log(`Server is running on http://localhost:${PORT}`);
 });

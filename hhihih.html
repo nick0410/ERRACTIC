@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Eratic</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        body {
+                font-family: Arial, sans-serif;
+                margin: 0;
+                padding: 0;
+                background-color: #f4f4f4;
+                color: #333;
+            }
+            h1 {
+                text-align: center;
+                margin: 20px 0;
+                color: #4a90e2;
+            }
+            #videos {
+                display: flex;
+                justify-content: center;
+                margin-bottom: 20px;
+            }
+            video {
+                border: 2px solid #4a90e2;
+                border-radius: 8px;
+                width: 45%;
+                height: auto;
+            }
+            button {
+                background-color: #4a90e2;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 10px 15px;
+                margin: 0 5px;
+                cursor: pointer;
+            }
+            button:hover {
+                background-color: #357ab8;
+            }
+            #chatBox {
+                margin-top: 20px;
+                border: 1px solid #ccc;
+                padding: 10px;
+                height: 300px;
+                overflow-y: scroll;
+                background-color: white;
+                border-radius: 8px;
+            }
+            #messageInput {
+                width: 75%;
+                padding: 10px;
+                border: 1px solid #ccc;
+                border-radius: 5px;
+            }
+            #loading {
+                text-align: center;
+                font-size: 18px;
+                color: #4a90e2;
+                margin-top: 20px;
+            }
+            #userCount {
+                text-align: center;
+                font-weight: bold;
+                margin-top: 10px;
+            }
+
+            /* Reset some default styles */
+            body {
+                font-family: Arial, sans-serif;
+                margin: 0;
+                padding: 0;
+                background-color: #f4f4f4;
+                color: #333;
+            }
+
+            /* Center content */
+            h1 {
+                text-align: center;
+                margin: 20px 0;
+                color: #4a90e2;
+                animation: fadeIn 1s ease-in;
+            }
+
+            /* Video container styles */
+            #videos {
+                display: flex;
+                justify-content: center;
+                margin-bottom: 20px;
+                opacity: 0;
+                animation: fadeIn 1s ease-in forwards;
+            }
+
+            video {
+                border: 2px solid #4a90e2;
+                border-radius: 8px;
+                width: 45%;
+                height: auto;
+                box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+                transition: transform 0.3s;
+            }
+
+            video:hover {
+                transform: scale(1.02);
+            }
+
+            /* Button styles */
+            button {
+                background-color: #4a90e2;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 10px 15px;
+                margin: 0 5px;
+                cursor: pointer;
+                font-size: 16px;
+                transition:
+                    background-color 0.3s,
+                    transform 0.2s;
+            }
+
+            button:hover {
+                background-color: #357ab8;
+                transform: translateY(-2px);
+            }
+
+            /* Chat box styles */
+            #chatBox {
+                margin-top: 20px;
+                border: 1px solid #ccc;
+                padding: 10px;
+                height: 300px;
+                overflow-y: scroll;
+                background-color: white;
+                border-radius: 8px;
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+                opacity: 0;
+                animation: fadeIn 1s ease-in forwards;
+            }
+
+            /* Message input styles */
+            #messageInput {
+                width: 75%;
+                padding: 10px;
+                border: 1px solid #ccc;
+                border-radius: 5px;
+                margin-right: 5px;
+                font-size: 16px;
+                transition: border-color 0.3s;
+            }
+
+            #messageInput:focus {
+                border-color: #4a90e2;
+                outline: none;
+            }
+
+            /* User count style */
+            #userCount {
+                text-align: center;
+                font-weight: bold;
+                margin-top: 10px;
+            }
+
+            /* Fade-in animation */
+            @keyframes fadeIn {
+                from {
+                    opacity: 0;
+                    transform: translateY(10px);
+                }
+                to {
+                    opacity: 1;
+                    transform: translateY(0);
+                }
+            }
+
+            /* Messages container */
+            #messages {
+                display: none; /* Hide this if not in use */
+            }
+
+            /* New message animation */
+            @keyframes newMessage {
+                from {
+                    opacity: 1;
+                    transform: translateY(-10px);
+                }
+                to {
+                    opacity: 1;
+                    transform: translateY(0);
+                }
+            }
+            #videos {
+                flex-direction: column;
+            }
+
+            video {
+                width: 100%; /* Full width for mobile */
+                height: auto;
+            }
+
+            @media (min-width: 600px) {
+                #videos {
+                    flex-direction: row;
+                }
+
+                video {
+                    width: 45%;
+                }
+            }
+    </style>
+</head>
+<body>
+    <h1>E-R-A-T-I-C</h1>
+    <div id="videos">
+        <video id="localVideo" autoplay muted></video>
+        <video id="remoteVideo" autoplay></video>
+    </div>
+    <button id="startButton">Start Chat</button>
+    <button id="skipButton">Skip</button>
+    <button id="hangupButton">Stop Chat</button>
+    <div id="loading">Finding a new partner...</div>
+    <div id="chatBox"></div>
+    <input type="text" id="messageInput" placeholder="Type your message..." />
+    <button id="sendMessageButton">Send</button>
+    <p id="userCount"></p>
+
+    <script>
+        const socket = io();
+        let peerConnection;
+        let localStream;
+        const configuration = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+
+        const localVideo = document.getElementById("localVideo");
+        const remoteVideo = document.getElementById("remoteVideo");
+        const userCount = document.getElementById("userCount");
+        const chatBox = document.getElementById("chatBox");
+        const messageInput = document.getElementById("messageInput");
+        const sendMessageButton = document.getElementById("sendMessageButton");
+        const loading = document.getElementById("loading");
+
+        // Function to start the media stream
+        async function getMediaStream() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                return stream;
+            } catch (err) {
+                console.error("Error accessing media devices:", err);
+                alert("Please allow access to camera and microphone.");
+                return null;
+            }
+        }
+
+        // Function to start the chat
+        async function startChat() {
+            loading.style.display = "block"; // Show loading
+            localStream = await getMediaStream();
+            if (!localStream) return; // Exit if no stream
+            localVideo.srcObject = localStream;
+            socket.emit("start-chat");
+        }
+
+        // Send message functionality
+        sendMessageButton.onclick = () => {
+            const message = messageInput.value;
+            if (message.trim()) {
+                socket.emit("chat-message", message);
+                addMessageToChatBox("You", message);
+                messageInput.value = ""; // Clear input
+            }
+        };
+
+        // Add incoming messages to chat box
+        function addMessageToChatBox(sender, message) {
+            const newMessage = document.createElement("p");
+            newMessage.textContent = `${sender}: ${message}`;
+            chatBox.appendChild(newMessage);
+        }
+
+        // Skip functionality
+        document.getElementById("skipButton").onclick = () => {
+            socket.emit("skip");
+            stopChat();
+            loading.style.display = "block"; // Show loading
+        };
+
+        // Hangup/Stop Chat functionality
+        document.getElementById("hangupButton").onclick = () => {
+            stopChat();
+            socket.emit("stop-chat");
+            availableUsers.push(socket.id);  // Allow user to be available for other connections
+        };
+
+        // Stop chat helper function
+        function stopChat() {
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+            }
+            remoteVideo.srcObject = null;
+            loading.style.display = "none"; // Hide loading after stopping
+        }
+
+        // Socket events
+        socket.on("chat-message", ({ sender, message }) => {
+            addMessageToChatBox(sender, message);
+        });
+
+        socket.on("connected", async ({ peerId }) => {
+            loading.style.display = "none"; // Hide loading
+            if (!localStream) localStream = await getMediaStream();
+
+            peerConnection = new RTCPeerConnection(configuration);
+            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+            peerConnection.onicecandidate = event => {
+                if (event.candidate) socket.emit("candidate", event.candidate);
+            };
+            peerConnection.ontrack = event => {
+                remoteVideo.srcObject = event.streams[0];
+            };
+
+            // Send offer after peer connection is created
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            socket.emit("offer", peerConnection.localDescription);
+        });
+
+        socket.on("offer", async offer => {
+            peerConnection = new RTCPeerConnection(configuration);
+            peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+
+            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            socket.emit("answer", peerConnection.localDescription);
+        });
+
+        socket.on("answer", answer => {
+            peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        });
+
+        socket.on("candidate", candidate => {
+            peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        });
+
+        socket.on("disconnected", () => {
+            stopChat();
+            loading.style.display = "block"; // Show loading while finding a new partner
+        });
+
+        document.getElementById("startButton").onclick = startChat;
+    </script>
+</body>
+</html>
